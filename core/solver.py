@@ -18,11 +18,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from core.model import build_model
-from core.checkpoint import CheckpointIO
-from core.data_loader import InputFetcher
-import core.utils as utils
-from metrics.eval import calculate_metrics
+from submodules.stargan2.core.model import build_model
+from submodules.stargan2.core.checkpoint import CheckpointIO
+from submodules.stargan2.core.data_loader import InputFetcher
+import submodules.stargan2.core.utils as utils
+from submodules.stargan2.metrics.eval import calculate_metrics
 
 
 class Solver(nn.Module):
@@ -157,36 +157,70 @@ class Solver(nn.Module):
                 print(log)
 
             # generate images for debugging
-            if (i+1) % args.sample_every == 0:
-                os.makedirs(args.sample_dir, exist_ok=True)
-                utils.debug_image(nets_ema, args, inputs=inputs_val, step=i+1)
+            #if (i+1) % args.sample_every == 0:
+                #os.makedirs(args.sample_dir, exist_ok=True)
+                #utils.debug_image(nets_ema, args, inputs=inputs_val, step=i+1)
 
             # save model checkpoints
             if (i+1) % args.save_every == 0:
                 self._save_checkpoint(step=i+1)
 
             # compute FID and LPIPS if necessary
-            if (i+1) % args.eval_every == 0:
-                calculate_metrics(nets_ema, args, i+1, mode='latent')
-                calculate_metrics(nets_ema, args, i+1, mode='reference')
+            #if (i+1) % args.eval_every == 0:
+                #calculate_metrics(nets_ema, args, i+1, mode='latent')
+                #calculate_metrics(nets_ema, args, i+1, mode='reference')
 
     @torch.no_grad()
     def sample(self, loaders):
         args = self.args
         nets_ema = self.nets_ema
-        os.makedirs(args.result_dir, exist_ok=True)
+        #os.makedirs(args.result_dir, exist_ok=True)
         self._load_checkpoint(args.resume_iter)
 
-        src = next(InputFetcher(loaders.src, None, args.latent_dim, 'test'))
-        ref = next(InputFetcher(loaders.ref, None, args.latent_dim, 'test'))
+        src_info = loaders.src.dataset.imgs
+        ref_info = loaders.ref.dataset.imgs
 
-        fname = ospj(args.result_dir, 'reference.jpg')
-        print('Working on {}...'.format(fname))
-        utils.translate_using_reference(nets_ema, args, src.x, ref.x, ref.y, fname)
+        ref = InputFetcher(loaders.ref, None, args.latent_dim, 'test')
+        ref_batch = next(ref)
+        x_ref_sel = ref_batch.x[0]
+        num_sel_domains = 1
+        image_count = 0
+        while image_count < len(ref_info) and num_sel_domains < args.num_domains:
+            for i in range(ref_batch.x.shape[0]):
+                idx = image_count + i
+                if ref_info[idx][1] == num_sel_domains:
+                    if num_sel_domains == 1:
+                        x_ref_sel = torch.stack((x_ref_sel, ref_batch.x[i]), dim=0)
+                    else:
+                        temp = torch.reshape(ref_batch.x[i], (1, ref_batch.x.shape[1], ref_batch.x.shape[2], ref_batch.x.shape[3]))
+                        x_ref_sel = torch.cat((x_ref_sel, temp))
+                    num_sel_domains += 1
+            image_count += ref_batch.x.shape[0]
+            ref_batch = next(ref)
+        if x_ref_sel.shape[0] != args.num_domains:
+            raise Exception(
+                'Error: Please provide a reference directory that contains at least one image from each domain.')
 
-        fname = ospj(args.result_dir, 'video_ref.mp4')
-        print('Working on {}...'.format(fname))
-        utils.video_ref(nets_ema, args, src.x, ref.x, ref.y, fname)
+        domains = loaders.src.dataset.classes
+        src = InputFetcher(loaders.src, None, args.latent_dim, 'test')
+        src_batch = next(src)
+        image_count = 0
+        while image_count < len(src_info):
+            utils.translate_using_reference(nets_ema, args, src_batch.x, x_ref_sel, src_info, domains, image_count)
+            image_count += src_batch.x.shape[0]
+            src_batch = next(src)
+            print('Processed', image_count, '/', len(src_info), 'images')
+        print('Done')
+
+        #fname = ospj(args.result_dir, 'reference.jpg')
+        #print('Working on {}...'.format(fname))
+        #utils.translate_using_reference(nets_ema, args, src.x, ref.x, ref.y, fname)
+        #utils.translate_using_latent(nets_ema, args, src.x, [torch.ones(src.x.size(0)).long().to('cuda')],
+                                     #[torch.randn(src.x.size(0), 16).to('cuda')], .5, fname)
+
+        #fname = ospj(args.result_dir, 'video_ref.mp4')
+        #print('Working on {}...'.format(fname))
+        #utils.video_ref(nets_ema, args, src.x, ref.x, ref.y, fname)
 
     @torch.no_grad()
     def evaluate(self):
