@@ -208,8 +208,8 @@ class Solver(nn.Module):
         while image_count < len(src_info):
             utils.translate_using_reference(nets_ema, args, src_batch.x, x_ref_sel, src_info, domains, image_count)
             image_count += src_batch.x.shape[0]
-            src_batch = next(src)
             print('Processed', image_count, '/', len(src_info), 'images')
+            src_batch = next(src)
         print('Done')
 
         #fname = ospj(args.result_dir, 'reference.jpg')
